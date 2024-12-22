@@ -13,24 +13,25 @@ vals <- reactiveValues(
     MAE_backup = MAE
 )
 
-observeEvent(input$upload_example,{
-  withBusyIndicatorServer("upload_example", {
-    if (input$example_data == "toy"){
-      data_dir <- system.file("extdata/MAE.rds", package = "animalcules")
-    } else if (input$example_data == "tb"){
-      data_dir <- system.file("extdata/TB_example_dataset.rds", 
-                             package = "animalcules")
-    } else if (input$example_data == "asthma"){
-      data_dir <- system.file("extdata/asthma_example_dataset.rds", 
-                             package = "animalcules")
-    }
-    MAE_tmp <- readRDS(data_dir)
-    vals$MAE <- MAE_tmp
-    vals$MAE_backup <- MAE_tmp
-    # Update ui
-    update_inputs(session)
-  })
-})
+
+# observeEvent(input$upload_example,{
+#   withBusyIndicatorServer("upload_example", {
+#     if (input$example_data == "toy"){
+#       data_dir <- system.file("extdata/MAE.rds", package = "animalcules")
+#     } else if (input$example_data == "tb"){
+#       data_dir <- system.file("extdata/TB_example_dataset.rds", 
+#                              package = "animalcules")
+#     } else if (input$example_data == "asthma"){
+#       data_dir <- system.file("extdata/asthma_example_dataset.rds", 
+#                              package = "animalcules")
+#     }
+#     MAE_tmp <- readRDS(data_dir)
+#     vals$MAE <- MAE_tmp
+#     vals$MAE_backup <- MAE_tmp
+#     # Update ui
+#     update_inputs(session)
+#   })
+# })
 
 update_inputs <- function(session) {
     updateCovariate(session)
@@ -178,398 +179,502 @@ updateOrganisms <- function(session){
     updateSelectInput(session, "filter_organism_dis", choices = org.name)
 }
 
-observeEvent(input$upload_animalcules,{
-  withBusyIndicatorServer("upload_animalcules", {
-    MAE_tmp <- readRDS(input$rdfile$datapath)
-    #print(colData(MAE_tmp))
-    vals$MAE <- MAE_tmp
-    vals$MAE_backup <- MAE_tmp
-    # Update ui
-    update_inputs(session)
-  })
+#####
+
+tbls <- reactive({
+  get_db_tables(sc, input$db)
 })
+
+tbl_read_count <- reactive({
+  #dbGetQuery(sc, glue("SELECT taxonomyId,sampleId,readCounts FROM metagenomic_test1_16.metagenomicanalysis_metagenomicconverttodelta_readcountsdt_x_0_outdeltatable_20241215164422")) %>% 
+    #read_table("^metagenomicreadcounttable_delta",tbls()) %>% 
+  read_table("^metagenomicanalysis_metagenomicconverttodelta_readcountsdt_x_0_outdeltatable_20241222153214",tbls()) %>% 
+    select(taxonomyId,sampleId,readCounts) %>%
+    # The following code would encounter an error:
+    # Error in py_get_attr(py_context, py_method) : 
+    # AttributeError: 'DataFrame' object has no attribute '%>%'
+    #tidyr::pivot_wider(names_from = sampleId,values_from = readCounts ) %>%
+    #collect() %>% 
+    #as.data.frame()
+    collect() %>% 
+    tidyr::pivot_wider(names_from = sampleId,values_from = readCounts )
+})
+
+tbl_tax_id <- reactive({
+  t1_taxinfo <- read_table("^metagenomictaxinfotable_delta",tbls())
+  t2_readcount <- read_table("^metagenomicanalysis_metagenomicconverttodelta_readcountsdt_x_0_outdeltatable_20241222153214",tbls())
+
+  t2_readcount %>%  
+    select(taxonomyId) %>% 
+    distinct() %>% 
+    inner_join(t1_taxinfo,by='taxonomyId') %>%  
+    filter(taxonomicRank == "S") %>% 
+    select(taxonomyId,taxonomicLineage) %>% 
+    collect()
+})
+
+observe({
+  read_count <- tbl_read_count()
+  row.names(read_count) <- read_count$taxonomyId
+  read_count$taxonomyId <- NULL
+  se_mgx <-
+    read_count %>% 
+    base::data.matrix() %>%
+    S4Vectors::SimpleList() %>%
+    magrittr::set_names("MGX")
+  
+  # tax_id <- tbl_tax_id()
+  # # TODO column tax_id should rename to taxonomyId
+  # row.names(tax_id) <- tax_id$tax_id
+  # tax_id$tax_id <- NULL
+  
+  # transform tax_id_table
+  pre_tax_id <- tbl_tax_id()
+  tax_id_columns <- c("D", "P", "C", "O", "F", "G", "S")  # Define columns based on prefixes
+  prefixes <- paste0(tolower(tax_id_columns), "_")         # Generate the prefixes (e.g., "d_", "p_", ...)
+  split_Lineage <- strsplit(pre_tax_id$taxonomicLineage,'|',fixed=TRUE)
+  tax_id <- data.frame()
+  processed_rows <- lapply(split_Lineage, function(row) {
+    # Extract values for each prefix
+    sapply(prefixes, function(prefix) {
+      value <- grep(paste0("^", prefix), row, value = TRUE)
+      if (length(value) == 0) "" else gsub(paste0("^", prefix), paste0(prefix, "_"), value)
+    })
+  })
+  # Convert the list to a data frame efficiently
+  tax_id <- do.call(rbind, processed_rows)
+  tax_id <- as.data.frame(tax_id, stringsAsFactors = FALSE)
+  colnames(tax_id) <- tax_id_columns
+  # Assign row names
+  row.names(tax_id) <- pre_tax_id$taxonomyId
+  #============
+  se_rowData <-
+    tax_id %>%
+    base::data.frame() %>%
+    dplyr::mutate_all(as.character) %>%
+    #dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
+    S4Vectors::DataFrame()
+  
+  metadata_table <- data.frame(
+    sampleId = c("TPMIC03108F0_Fg","TPMIC03078F0_Fg","TPMIC01136F0_Fg"),
+    Age = c(70,55,60),
+    Gender = c("F","M","F")
+  )
+  row.names(metadata_table) <- metadata_table$sampleId
+  metadata_table$sampleId <- NULL
+  
+  
+  se_colData <-
+    metadata_table %>%
+    S4Vectors::DataFrame()
+  
+  
+  microbe_se <- SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
+                                                           colData = se_colData,
+                                                           rowData = se_rowData)
+  mae_experiments <- S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
+  MAE <- MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
+                                                    colData = se_colData)
+  vals$MAE <- MAE
+  vals$MAE_backup <- MAE
+  #Update ui
+  update_inputs(session)
+  }) %>% bindEvent(input$start)
+
+
+
+# observeEvent(input$upload_animalcules,{
+#   withBusyIndicatorServer("upload_animalcules", {
+#     MAE_tmp <- readRDS(input$rdfile$datapath)
+#     #print(colData(MAE_tmp))
+#     vals$MAE <- MAE_tmp
+#     vals$MAE_backup <- MAE_tmp
+#     # Update ui
+#     update_inputs(session)
+#   })
+# })
 
 
 ## animalcules-id
-observeEvent(input$upload_mae,{
-  withBusyIndicatorServer("upload_mae", {
-    MAE_list <- readRDS(input$rdfile_id$datapath)
-    # check the length of the list
-    if (length(MAE_list) == 1){
-        MAE_tmp <- MAE_list[[1]]
-    } else{
-        if (input$mae_data_type == "em"){
-        MAE_tmp <- MAE_list[['em']]
-        } else{
-        MAE_tmp <- MAE_list[['hit']]
-        }
-    }
+# observeEvent(input$upload_mae,{
+#   withBusyIndicatorServer("upload_mae", {
+#     MAE_list <- readRDS(input$rdfile_id$datapath)
+#     # check the length of the list
+#     if (length(MAE_list) == 1){
+#         MAE_tmp <- MAE_list[[1]]
+#     } else{
+#         if (input$mae_data_type == "em"){
+#         MAE_tmp <- MAE_list[['em']]
+#         } else{
+#         MAE_tmp <- MAE_list[['hit']]
+#         }
+#     }
+# 
+#     vals$MAE <- MAE_tmp
+#     vals$MAE_backup <- MAE_tmp
+#     # Update ui
+#     update_inputs(session)
+#   })
+# })
 
-    vals$MAE <- MAE_tmp
-    vals$MAE_backup <- MAE_tmp
-    # Update ui
-    update_inputs(session)
-  })
-})
+# ### BIOM
+# observeEvent(input$upload_biom,{
+#   withBusyIndicatorServer("upload_biom", {
+#   biom_obj <- biomformat::read_biom(input$biom_id$datapath)
+#   count_table <- as.data.frame(as(biomformat::biom_data(biom_obj), "matrix"))
+#   tax_table <- as.data.frame(as(biomformat::observation_metadata(biom_obj), "matrix"))
+#   metadata_table <- as.data.frame(as(biomformat::sample_metadata(biom_obj), "matrix"))
+#   
+#   # create MAE object
+#   se_mgx <-
+#       count_table %>%
+#       base::data.matrix() %>%
+#       S4Vectors::SimpleList() %>%
+#       magrittr::set_names("MGX")
+# 
+#   se_colData <-
+#       metadata_table %>%
+#       S4Vectors::DataFrame()
+# 
+#   se_rowData <-
+#       tax_table %>%
+#       base::data.frame() %>%
+#       dplyr::mutate_all(as.character) %>%
+#       #dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
+#       S4Vectors::DataFrame()
+# 
+#   microbe_se <-
+#       SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
+#                                                colData = se_colData,
+#                                                rowData = se_rowData)
+#   mae_experiments <-
+#       S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
+# 
+#   MAE <-
+#       MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
+#                                                colData = se_colData)
+#     vals$MAE <- MAE
+#     vals$MAE_backup <- MAE
+#     # Update ui
+#     update_inputs(session)
+#   })
+# })
 
-### BIOM
-observeEvent(input$upload_biom,{
-  withBusyIndicatorServer("upload_biom", {
-  biom_obj <- biomformat::read_biom(input$biom_id$datapath)
-  count_table <- as.data.frame(as(biomformat::biom_data(biom_obj), "matrix"))
-  tax_table <- as.data.frame(as(biomformat::observation_metadata(biom_obj), "matrix"))
-  metadata_table <- as.data.frame(as(biomformat::sample_metadata(biom_obj), "matrix"))
-  
-  # create MAE object
-  se_mgx <-
-      count_table %>%
-      base::data.matrix() %>%
-      S4Vectors::SimpleList() %>%
-      magrittr::set_names("MGX")
+# observeEvent(input$uploadDataCount,{
+#   withBusyIndicatorServer("uploadDataCount", {
+# 
+#   count_table <- read.table(input$countsfile$datapath,
+#                        header = input$header.count,
+#                        row.names = 1,
+#                        stringsAsFactors = FALSE,
+#                        sep = input$sep.count,
+#                        comment.char="",
+#                        check.names = FALSE)
+# 
+#   tax_table <- read.table(input$taxon.table$datapath,
+#                             header = input$header.count,
+#                             sep = input$sep.count,
+#                             row.names= 1,
+#                             stringsAsFactors=FALSE,
+#                             comment.char="",
+#                             check.names = FALSE)
+# 
+#   metadata_table <- read.table(input$annotfile.count$datapath,
+#                             header = input$header.count,
+#                             sep = input$sep.count,
+#                             row.names=input$metadata_sample_name_col_count,
+#                             stringsAsFactors=FALSE,
+#                             comment.char="",
+#                             check.names = FALSE)
+# 
+# 
+#   # Choose only the samples in metadata that have counts data as well
+#     sample_overlap <- intersect(colnames(count_table), rownames(metadata_table))
+#     if (length(sample_overlap) < length(colnames(count_table))){
+#         print(paste("The following samples don't have metadata info:",
+#                     paste(colnames(count_table)[which(!colnames(count_table) %in% sample_overlap)],
+#                           collapse = ",")))
+#         count_table <- count_table[,which(colnames(count_table) %in% sample_overlap)]
+#     }
+#     metadata_table <- metadata_table[match(colnames(count_table), rownames(metadata_table)),,drop=FALSE]
+# 
+# 
+# 
+#   # Test and fix the constant/zero row
+#   row.remove.index <- c()
+#   if (sum(base::rowSums(as.matrix(count_table)) == 0) > 0){
+#       row.remove.index <- which(base::rowSums(as.matrix(count_table)) == 0)
+#       count_table <- count_table[-row.remove.index,]
+#   }
+#   
+#   species_overlap <- intersect(rownames(count_table), rownames(tax_table))
+#   if (length(species_overlap) < length(rownames(count_table))){
+#     print(paste("The following species don't have taxonomy info:",
+#     paste(rownames(count_table)[which(!rownames(count_table) %in% species_overlap)],
+#     collapse = ",")))
+#     count_table <- count_table[which(rownames(count_table) %in% species_overlap),]
+#   }
+#   tax_table <- tax_table[match(rownames(count_table), rownames(tax_table)), ]
+#   
+#   
+#   # replace spaces in tax name with underscore
+#   tax_table <- as.data.frame(apply(tax_table,
+#                                    2,
+#                                    function(x)gsub('\\s+', '_',x)))
+#   
+#   
+#   
+#   # create MAE object
+#   se_mgx <-
+#       count_table %>%
+#       base::data.matrix() %>%
+#       S4Vectors::SimpleList() %>%
+#       magrittr::set_names("MGX")
+# 
+#   se_colData <-
+#       metadata_table %>%
+#       S4Vectors::DataFrame()
+# 
+#   se_rowData <-
+#       tax_table %>%
+#       base::data.frame() %>%
+#       dplyr::mutate_all(as.character) %>%
+#       #dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
+#       S4Vectors::DataFrame()
+# 
+#   microbe_se <-
+#       SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
+#                                                colData = se_colData,
+#                                                rowData = se_rowData)
+#   mae_experiments <-
+#       S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
+# 
+#   MAE <-
+#       MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
+#                                                colData = se_colData)
+# 
+# 
+#   # update vals
+#   vals$MAE <- MAE
+#   vals$MAE_backup <- MAE
+# 
+# 
+#   # Update ui
+#   update_inputs(session)
+#   })
+# })
 
-  se_colData <-
-      metadata_table %>%
-      S4Vectors::DataFrame()
+# observeEvent(input$uploadDataCountTi,{
+#   withBusyIndicatorServer("uploadDataCountTi", {
+# 
+#   count_table <- read.table(input$countsfileTi$datapath,
+#                        header = input$header.countTi,
+#                        row.names = 1,
+#                        stringsAsFactors = FALSE,
+#                        sep = input$sep.countTi,
+#                        comment.char="",
+#                        check.names = FALSE)
+#   metadata_table <- read.table(input$annotfile.countTi$datapath,
+#                             header = input$header.countTi,
+#                             sep = input$sep.countTi,
+#                             row.names=input$metadata_sample_name_col_countTi,
+#                             stringsAsFactors=FALSE,
+#                             comment.char="",
+#                             check.names = FALSE)
+# 
+# 
+#   # Choose only the samples in metadata that have counts data as well
+#     sample_overlap <- intersect(colnames(count_table), rownames(metadata_table))
+#     if (length(sample_overlap) < length(colnames(count_table))){
+#         print(paste("The following samples don't have metadata info:",
+#                     paste(colnames(count_table)[which(!colnames(count_table) %in% sample_overlap)],
+#                           collapse = ",")))
+#         count_table <- count_table[,which(colnames(count_table) %in% sample_overlap)]
+#     }
+#     metadata_table <- metadata_table[match(colnames(count_table), rownames(metadata_table)),,drop=FALSE]
+# 
+# 
+# 
+#   # Test and fix the constant/zero row
+#   row.remove.index <- c()
+#   if (sum(base::rowSums(as.matrix(count_table)) == 0) > 0){
+#       row.remove.index <- which(base::rowSums(as.matrix(count_table)) == 0)
+#       count_table <- count_table[-row.remove.index,]
+#   }
+#   
+#   ids <- rownames(count_table)
+#   if (startsWith(ids[1],'ti|')){
+#       tids <- unlist(lapply(ids, FUN = grep_tid))
+#   }
+#   
+#   if (sum(is.na(tids)) > 0){
+#       tid_remove <- which(is.na(tids))
+#       ids <- ids[-tid_remove]
+#       tids <- tids[-tid_remove]
+#       count_table <- count_table[-tid_remove,]
+#   }
+# 
+#   taxonLevels <- find_taxonomy(tids)
+#   tax_table <- find_taxon_mat(ids, taxonLevels)
+# 
+# 
+#   # replace spaces in tax name with underscore
+#   tax_table <- as.data.frame(apply(tax_table,
+#                                   2,
+#                                   function(x)gsub('\\s+', '_',x)))
+#   
+#   species_overlap <- intersect(rownames(count_table), rownames(tax_table))
+#   if (length(species_overlap) < length(rownames(count_table))){
+#     print(paste("The following species don't have taxonomy info:",
+#     paste(rownames(count_table)[which(!rownames(count_table) %in% species_overlap)],
+#     collapse = ",")))
+#     count_table <- count_table[which(rownames(count_table) %in% species_overlap),]
+#   }
+#   tax_table <- tax_table[match(rownames(count_table), rownames(tax_table)), ]
+# 
+#  
+#   # create MAE object
+#   se_mgx <-
+#       count_table %>%
+#       base::data.matrix() %>%
+#       S4Vectors::SimpleList() %>%
+#       magrittr::set_names("MGX")
+# 
+#   se_colData <-
+#       metadata_table %>%
+#       S4Vectors::DataFrame()
+# 
+#   se_rowData <-
+#       tax_table %>%
+#       base::data.frame() %>%
+#       dplyr::mutate_all(as.character) %>%
+#       dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
+#       S4Vectors::DataFrame()
+# 
+#   microbe_se <-
+#       SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
+#                                                colData = se_colData,
+#                                                rowData = se_rowData)
+#   mae_experiments <-
+#       S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
+# 
+#   MAE <-
+#       MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
+#                                                colData = se_colData)
+# 
+#   # update vals
+#   vals$MAE <- MAE
+#   vals$MAE_backup <- MAE
+# 
+#   # Update ui
+#   update_inputs(session)
+#   })
+# })
 
-  se_rowData <-
-      tax_table %>%
-      base::data.frame() %>%
-      dplyr::mutate_all(as.character) %>%
-      #dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
-      S4Vectors::DataFrame()
-
-  microbe_se <-
-      SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
-                                               colData = se_colData,
-                                               rowData = se_rowData)
-  mae_experiments <-
-      S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
-
-  MAE <-
-      MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
-                                               colData = se_colData)
-    vals$MAE <- MAE
-    vals$MAE_backup <- MAE
-    # Update ui
-    update_inputs(session)
-  })
-})
-
-observeEvent(input$uploadDataCount,{
-  withBusyIndicatorServer("uploadDataCount", {
-
-  count_table <- read.table(input$countsfile$datapath,
-                       header = input$header.count,
-                       row.names = 1,
-                       stringsAsFactors = FALSE,
-                       sep = input$sep.count,
-                       comment.char="",
-                       check.names = FALSE)
-
-  tax_table <- read.table(input$taxon.table$datapath,
-                            header = input$header.count,
-                            sep = input$sep.count,
-                            row.names= 1,
-                            stringsAsFactors=FALSE,
-                            comment.char="",
-                            check.names = FALSE)
-
-  metadata_table <- read.table(input$annotfile.count$datapath,
-                            header = input$header.count,
-                            sep = input$sep.count,
-                            row.names=input$metadata_sample_name_col_count,
-                            stringsAsFactors=FALSE,
-                            comment.char="",
-                            check.names = FALSE)
-
-
-  # Choose only the samples in metadata that have counts data as well
-    sample_overlap <- intersect(colnames(count_table), rownames(metadata_table))
-    if (length(sample_overlap) < length(colnames(count_table))){
-        print(paste("The following samples don't have metadata info:",
-                    paste(colnames(count_table)[which(!colnames(count_table) %in% sample_overlap)],
-                          collapse = ",")))
-        count_table <- count_table[,which(colnames(count_table) %in% sample_overlap)]
-    }
-    metadata_table <- metadata_table[match(colnames(count_table), rownames(metadata_table)),,drop=FALSE]
-
-
-
-  # Test and fix the constant/zero row
-  row.remove.index <- c()
-  if (sum(base::rowSums(as.matrix(count_table)) == 0) > 0){
-      row.remove.index <- which(base::rowSums(as.matrix(count_table)) == 0)
-      count_table <- count_table[-row.remove.index,]
-  }
-  
-  species_overlap <- intersect(rownames(count_table), rownames(tax_table))
-  if (length(species_overlap) < length(rownames(count_table))){
-    print(paste("The following species don't have taxonomy info:",
-    paste(rownames(count_table)[which(!rownames(count_table) %in% species_overlap)],
-    collapse = ",")))
-    count_table <- count_table[which(rownames(count_table) %in% species_overlap),]
-  }
-  tax_table <- tax_table[match(rownames(count_table), rownames(tax_table)), ]
-  
-  
-  # replace spaces in tax name with underscore
-  tax_table <- as.data.frame(apply(tax_table,
-                                   2,
-                                   function(x)gsub('\\s+', '_',x)))
-  
-  
-  
-  # create MAE object
-  se_mgx <-
-      count_table %>%
-      base::data.matrix() %>%
-      S4Vectors::SimpleList() %>%
-      magrittr::set_names("MGX")
-
-  se_colData <-
-      metadata_table %>%
-      S4Vectors::DataFrame()
-
-  se_rowData <-
-      tax_table %>%
-      base::data.frame() %>%
-      dplyr::mutate_all(as.character) %>%
-      #dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
-      S4Vectors::DataFrame()
-
-  microbe_se <-
-      SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
-                                               colData = se_colData,
-                                               rowData = se_rowData)
-  mae_experiments <-
-      S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
-
-  MAE <-
-      MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
-                                               colData = se_colData)
-
-
-  # update vals
-  vals$MAE <- MAE
-  vals$MAE_backup <- MAE
-
-
-  # Update ui
-  update_inputs(session)
-  })
-})
-
-observeEvent(input$uploadDataCountTi,{
-  withBusyIndicatorServer("uploadDataCountTi", {
-
-  count_table <- read.table(input$countsfileTi$datapath,
-                       header = input$header.countTi,
-                       row.names = 1,
-                       stringsAsFactors = FALSE,
-                       sep = input$sep.countTi,
-                       comment.char="",
-                       check.names = FALSE)
-  metadata_table <- read.table(input$annotfile.countTi$datapath,
-                            header = input$header.countTi,
-                            sep = input$sep.countTi,
-                            row.names=input$metadata_sample_name_col_countTi,
-                            stringsAsFactors=FALSE,
-                            comment.char="",
-                            check.names = FALSE)
-
-
-  # Choose only the samples in metadata that have counts data as well
-    sample_overlap <- intersect(colnames(count_table), rownames(metadata_table))
-    if (length(sample_overlap) < length(colnames(count_table))){
-        print(paste("The following samples don't have metadata info:",
-                    paste(colnames(count_table)[which(!colnames(count_table) %in% sample_overlap)],
-                          collapse = ",")))
-        count_table <- count_table[,which(colnames(count_table) %in% sample_overlap)]
-    }
-    metadata_table <- metadata_table[match(colnames(count_table), rownames(metadata_table)),,drop=FALSE]
-
-
-
-  # Test and fix the constant/zero row
-  row.remove.index <- c()
-  if (sum(base::rowSums(as.matrix(count_table)) == 0) > 0){
-      row.remove.index <- which(base::rowSums(as.matrix(count_table)) == 0)
-      count_table <- count_table[-row.remove.index,]
-  }
-  
-  ids <- rownames(count_table)
-  if (startsWith(ids[1],'ti|')){
-      tids <- unlist(lapply(ids, FUN = grep_tid))
-  }
-  
-  if (sum(is.na(tids)) > 0){
-      tid_remove <- which(is.na(tids))
-      ids <- ids[-tid_remove]
-      tids <- tids[-tid_remove]
-      count_table <- count_table[-tid_remove,]
-  }
-
-  taxonLevels <- find_taxonomy(tids)
-  tax_table <- find_taxon_mat(ids, taxonLevels)
-
-
-  # replace spaces in tax name with underscore
-  tax_table <- as.data.frame(apply(tax_table,
-                                  2,
-                                  function(x)gsub('\\s+', '_',x)))
-  
-  species_overlap <- intersect(rownames(count_table), rownames(tax_table))
-  if (length(species_overlap) < length(rownames(count_table))){
-    print(paste("The following species don't have taxonomy info:",
-    paste(rownames(count_table)[which(!rownames(count_table) %in% species_overlap)],
-    collapse = ",")))
-    count_table <- count_table[which(rownames(count_table) %in% species_overlap),]
-  }
-  tax_table <- tax_table[match(rownames(count_table), rownames(tax_table)), ]
-
- 
-  # create MAE object
-  se_mgx <-
-      count_table %>%
-      base::data.matrix() %>%
-      S4Vectors::SimpleList() %>%
-      magrittr::set_names("MGX")
-
-  se_colData <-
-      metadata_table %>%
-      S4Vectors::DataFrame()
-
-  se_rowData <-
-      tax_table %>%
-      base::data.frame() %>%
-      dplyr::mutate_all(as.character) %>%
-      dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
-      S4Vectors::DataFrame()
-
-  microbe_se <-
-      SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
-                                               colData = se_colData,
-                                               rowData = se_rowData)
-  mae_experiments <-
-      S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
-
-  MAE <-
-      MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
-                                               colData = se_colData)
-
-  # update vals
-  vals$MAE <- MAE
-  vals$MAE_backup <- MAE
-
-  # Update ui
-  update_inputs(session)
-  })
-})
-
-observeEvent(input$uploadDataPs, {
-  withBusyIndicatorServer("uploadDataPs", {
-
-
-    df.path.vec <- c()
-    df.name.vec <- c()
-    for(i in seq_len(length(input$countsfile.pathoscope[,1]))){
-        df.path.vec[i] <- input$countsfile.pathoscope[[i, 'datapath']]
-        df.name.vec[i] <- input$countsfile.pathoscope[[i, 'name']]
-    }
-
-    datlist <- read_pathoscope_data(input_dir, pathoreport_file_suffix = input$report_suffix,
-                                  use.input.files = TRUE,
-                                  input.files.path.vec = df.path.vec,
-                                  input.files.name.vec = df.name.vec)
-    count_table <- datlist$countdat
-
-    metadata_table <- read.csv(input$annotfile.ps$datapath,
-                              header = input$header.ps,
-                              sep = input$sep.ps,
-                              row.names=input$metadata_sample_name_col,
-                              stringsAsFactors=FALSE,
-                              strip.white=TRUE)
-
-    # Choose only the samples in metadata that have counts data as well
-    sample_overlap <- intersect(colnames(count_table), rownames(metadata_table))
-    if (length(sample_overlap) < length(colnames(count_table))){
-        print(paste("The following samples don't have metadata info:",
-                    paste(colnames(count_table)[which(!colnames(count_table) %in% sample_overlap)],
-                          collapse = ",")))
-        #shinyalert::shinyalert("Notice!", "Some samples miss", type = "info")
-
-        count_table <- count_table[,which(colnames(count_table) %in% sample_overlap)]
-    }
-    metadata_table <- metadata_table[match(colnames(count_table), rownames(metadata_table)),,drop = FALSE]
-
-    # print("read in done!")
-    # Test and fix the constant/zero row
-    row.remove.index <- c()
-    if (sum(base::rowSums(as.matrix(count_table)) == 0) > 0){
-        row.remove.index <- which(base::rowSums(as.matrix(count_table)) == 0)
-        count_table <- count_table[-row.remove.index,]
-    }
-
-    ids <- rownames(count_table)
-    tids <- unlist(lapply(ids, FUN = grep_tid))
-    if (sum(is.na(tids)) > 0){
-        tid_remove <- which(is.na(tids))
-        ids <- ids[-tid_remove]
-        tids <- tids[-tid_remove]
-        count_table <- count_table[-tid_remove,]
-    }
-
-    taxonLevels <- find_taxonomy(tids)
-    tax_table <- find_taxon_mat(ids, taxonLevels)
-
-    
-    # replace spaces in tax name with underscore
-   tax_table <- as.data.frame(apply(tax_table,
-                                    2,
-                                    function(x)gsub('\\s+', '_',x)))
-  
-    
-  # create MAE object
-  se_mgx <-
-      count_table %>%
-      base::data.matrix() %>%
-      S4Vectors::SimpleList() %>%
-      magrittr::set_names("MGX")
-
-  se_colData <-
-      metadata_table %>%
-      S4Vectors::DataFrame()
-
-  se_rowData <-
-      tax_table %>%
-      base::data.frame() %>%
-      dplyr::mutate_all(as.character) %>%
-      dplyr::select(superkingdom, phylum, class, order, family, genus, species) %>%
-      S4Vectors::DataFrame()
-
-  microbe_se <-
-      SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
-                                               colData = se_colData,
-                                               rowData = se_rowData)
-  mae_experiments <-
-      S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
-
-  MAE <-
-      MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
-                                               colData = se_colData)
-  ### debug
-  # saveRDS(MAE, "~/Desktop/test.RDS")
-
-  # update vals
-  vals$MAE <- MAE
-  vals$MAE_backup <- MAE
-
-  # Update ui
-  update_inputs(session)
-
-
-  })
-})
+# observeEvent(input$uploadDataPs, {
+#   withBusyIndicatorServer("uploadDataPs", {
+# 
+# 
+#     df.path.vec <- c()
+#     df.name.vec <- c()
+#     for(i in seq_len(length(input$countsfile.pathoscope[,1]))){
+#         df.path.vec[i] <- input$countsfile.pathoscope[[i, 'datapath']]
+#         df.name.vec[i] <- input$countsfile.pathoscope[[i, 'name']]
+#     }
+# 
+#     datlist <- read_pathoscope_data(input_dir, pathoreport_file_suffix = input$report_suffix,
+#                                   use.input.files = TRUE,
+#                                   input.files.path.vec = df.path.vec,
+#                                   input.files.name.vec = df.name.vec)
+#     count_table <- datlist$countdat
+# 
+#     metadata_table <- read.csv(input$annotfile.ps$datapath,
+#                               header = input$header.ps,
+#                               sep = input$sep.ps,
+#                               row.names=input$metadata_sample_name_col,
+#                               stringsAsFactors=FALSE,
+#                               strip.white=TRUE)
+# 
+#     # Choose only the samples in metadata that have counts data as well
+#     sample_overlap <- intersect(colnames(count_table), rownames(metadata_table))
+#     if (length(sample_overlap) < length(colnames(count_table))){
+#         print(paste("The following samples don't have metadata info:",
+#                     paste(colnames(count_table)[which(!colnames(count_table) %in% sample_overlap)],
+#                           collapse = ",")))
+#         #shinyalert::shinyalert("Notice!", "Some samples miss", type = "info")
+# 
+#         count_table <- count_table[,which(colnames(count_table) %in% sample_overlap)]
+#     }
+#     metadata_table <- metadata_table[match(colnames(count_table), rownames(metadata_table)),,drop = FALSE]
+# 
+#     # print("read in done!")
+#     # Test and fix the constant/zero row
+#     row.remove.index <- c()
+#     if (sum(base::rowSums(as.matrix(count_table)) == 0) > 0){
+#         row.remove.index <- which(base::rowSums(as.matrix(count_table)) == 0)
+#         count_table <- count_table[-row.remove.index,]
+#     }
+# 
+#     ids <- rownames(count_table)
+#     tids <- unlist(lapply(ids, FUN = grep_tid))
+#     if (sum(is.na(tids)) > 0){
+#         tid_remove <- which(is.na(tids))
+#         ids <- ids[-tid_remove]
+#         tids <- tids[-tid_remove]
+#         count_table <- count_table[-tid_remove,]
+#     }
+# 
+#     taxonLevels <- find_taxonomy(tids)
+#     tax_table <- find_taxon_mat(ids, taxonLevels)
+# 
+#     
+#     # replace spaces in tax name with underscore
+#    tax_table <- as.data.frame(apply(tax_table,
+#                                     2,
+#                                     function(x)gsub('\\s+', '_',x)))
+#   
+#     
+#   # create MAE object
+#   se_mgx <-
+#       count_table %>%
+#       base::data.matrix() %>%
+#       S4Vectors::SimpleList() %>%
+#       magrittr::set_names("MGX")
+# 
+#   se_colData <-
+#       metadata_table %>%
+#       S4Vectors::DataFrame()
+# 
+#   se_rowData <-
+#       tax_table %>%
+#       base::data.frame() %>%
+#       dplyr::mutate_all(as.character) %>%
+#       dplyr::select(superkingdom, phylum, class, order, family, genus, species) %>%
+#       S4Vectors::DataFrame()
+# 
+#   microbe_se <-
+#       SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
+#                                                colData = se_colData,
+#                                                rowData = se_rowData)
+#   mae_experiments <-
+#       S4Vectors::SimpleList(MicrobeGenetics = microbe_se)
+# 
+#   MAE <-
+#       MultiAssayExperiment::MultiAssayExperiment(experiments = mae_experiments,
+#                                                colData = se_colData)
+#   ### debug
+#   # saveRDS(MAE, "~/Desktop/test.RDS")
+# 
+#   # update vals
+#   vals$MAE <- MAE
+#   vals$MAE_backup <- MAE
+# 
+#   # Update ui
+#   update_inputs(session)
+# 
+# 
+#   })
+# })
 
 # Data input summary
 output$contents.count <- DT::renderDataTable({

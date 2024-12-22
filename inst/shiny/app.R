@@ -8,8 +8,15 @@ library(dplyr)
 library(magrittr)
 library(biomformat)
 
+library(sparklyr)
+library(pysparklyr)
+library(DBI)
+library(glue)
+library(bslib)
+#library(ranger)
+
 source(file.path("utils", "helpers.R"),  local = TRUE)
-# source(file.path("utils", "server_util.R"),  local = TRUE)
+source(file.path("utils", "server_util.R"),  local = TRUE)
 source(file.path("utils", "ui_util.R"),  local = TRUE)
 
 ui <- navbarPage(
