@@ -13,6 +13,7 @@ library(pysparklyr)
 library(DBI)
 library(glue)
 library(bslib)
+library(animalcules)
 #library(ranger)
 
 source(file.path("utils", "helpers.R"),  local = TRUE)
