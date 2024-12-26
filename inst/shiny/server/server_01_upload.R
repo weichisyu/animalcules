@@ -185,10 +185,23 @@ tbls <- reactive({
   get_db_tables(sc, input$db)
 })
 
+all_table <- reactive({
+  t1_readcount <- read_table("^metagenomicreadcounttable_delta",tbls()) %>% 
+    select(taxonomyId,sampleId,readCounts)
+  t2_taxinfo <- read_table("^metagenomictaxinfotable_delta",tbls()) %>% 
+    select(taxonomyId,taxonomicRank,taxonomicLineage)
+  t3_meta <- read_table("^demo_phenotype",tbls())
+  
+  t1_readcount %>%  
+    left_join(t2_taxinfo,by='taxonomyId') %>%  
+    left_join(t3_meta,by=join_by(sampleId == ID))
+})
+
 tbl_read_count <- reactive({
   #dbGetQuery(sc, glue("SELECT taxonomyId,sampleId,readCounts FROM metagenomic_test1_16.metagenomicanalysis_metagenomicconverttodelta_readcountsdt_x_0_outdeltatable_20241215164422")) %>% 
     #read_table("^metagenomicreadcounttable_delta",tbls()) %>% 
-  read_table("^metagenomicanalysis_metagenomicconverttodelta_readcountsdt_x_0_outdeltatable_20241222153214",tbls()) %>% 
+  #read_table("^metagenomicreadcounttable_delta",tbls()) %>% 
+    all_table() %>% 
     select(taxonomyId,sampleId,readCounts) %>%
     # The following code would encounter an error:
     # Error in py_get_attr(py_context, py_method) : 
@@ -196,22 +209,48 @@ tbl_read_count <- reactive({
     #tidyr::pivot_wider(names_from = sampleId,values_from = readCounts ) %>%
     #collect() %>% 
     #as.data.frame()
+    arrange(taxonomyId,sampleId) %>% 
     collect() %>% 
     tidyr::pivot_wider(names_from = sampleId,values_from = readCounts )
 })
 
 tbl_tax_id <- reactive({
-  t1_taxinfo <- read_table("^metagenomictaxinfotable_delta",tbls())
-  t2_readcount <- read_table("^metagenomicanalysis_metagenomicconverttodelta_readcountsdt_x_0_outdeltatable_20241222153214",tbls())
-
-  t2_readcount %>%  
-    select(taxonomyId) %>% 
-    distinct() %>% 
-    inner_join(t1_taxinfo,by='taxonomyId') %>%  
-    filter(taxonomicRank == "S") %>% 
+  # t1_readcount <- read_table("^metagenomicreadcounttable_delta",tbls())
+  # t2_taxinfo <- read_table("^metagenomictaxinfotable_delta",tbls())
+  # 
+  # t1_readcount %>%  
+  #   select(taxonomyId) %>% 
+  #   distinct() %>% 
+  #   left_join(t2_taxinfo,by='taxonomyId') %>%  
+  #   filter(taxonomicRank == "S") %>% 
+  #   select(taxonomyId,taxonomicLineage) %>% 
+  #   collect()
+  all_table() %>% 
+    filter(taxonomicRank == "S") %>%
     select(taxonomyId,taxonomicLineage) %>% 
+    distinct() %>% 
+    arrange(taxonomyId) %>% 
     collect()
 })
+
+tbl_meta <- reactive({
+  # t1_readcount <- read_table("^metagenomicreadcounttable_delta",tbls())
+  # t2_meta <- read_table("^demo_phenotype",tbls())
+  # 
+  # t1_readcount %>%  
+  #   select(sampleId) %>% 
+  #   distinct() %>% 
+  #   #left_join(t2_meta,by='sampleId') %>%
+  #   left_join(t2_meta,by=join_by(sampleId == ID)) %>%
+  #   collect()
+  drop_columns <- c("taxonomyId","readCounts","taxonomicRank","taxonomicLineage") 
+  all_table() %>% 
+    select(-one_of(drop_columns)) %>%
+    distinct() %>% 
+    arrange(sampleId) %>% 
+    collect()
+})
+
 
 observe({
   read_count <- tbl_read_count()
@@ -255,11 +294,9 @@ observe({
     #dplyr::select(superkingdom, phylum, class, order, family, genus) %>%
     S4Vectors::DataFrame()
   
-  metadata_table <- data.frame(
-    sampleId = c("TPMIC03108F0_Fg","TPMIC03078F0_Fg","TPMIC01136F0_Fg"),
-    Age = c(70,55,60),
-    Gender = c("F","M","F")
-  )
+
+  metadata_table <- tbl_meta() %>%
+    base::data.frame()
   row.names(metadata_table) <- metadata_table$sampleId
   metadata_table$sampleId <- NULL
   
