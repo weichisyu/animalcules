@@ -24,10 +24,11 @@ run_animalcules <- function(dev = FALSE, master = "sc://172.18.0.1:15002") {
     if (dev) {
         options(shiny.autoreload = TRUE)
     }
-    sc <- sparklyr::spark_connect(
+    sc <<- sparklyr::spark_connect(
       master = master,
       method = "spark_connect",
       version = "3.5"
     )
+
     shiny::runApp(appDir, display.mode = "normal")
 }
