@@ -1,9 +1,4 @@
 
-sc <- spark_connect(
-  master = "sc://localhost:15002",
-  method = "spark_connect",
-  version = "3.5"
-)
 
 dbs <- dbGetQuery(sc, "SHOW DATABASES")
 
