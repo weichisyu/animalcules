@@ -21,7 +21,7 @@ source(file.path("utils", "server_util.R"),  local = TRUE)
 source(file.path("utils", "ui_util.R"),  local = TRUE)
 
 ui <- navbarPage(
-  title = paste("animalcules v", packageVersion("animalcules"), sep = ""),
+  title = paste(" ", sep = ""),
   id="Animalcules",
   fluid=TRUE,
   theme = "bootstrap.min.css",

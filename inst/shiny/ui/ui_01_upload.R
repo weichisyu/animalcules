@@ -6,9 +6,9 @@ tags$div(
     tags$div(
         class = "container",
         fluidRow(
-            column(7, h1("TPMIC"))
+            column(7, h1("iHi"))
         ),
-        p("亞東醫院菌相資料分析平台"),
+        p("海雲平台"),
         uiOutput("tab")
 
     )
