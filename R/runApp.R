@@ -14,7 +14,7 @@
 #' run_animalcules()
 #' }
 #' @export
-run_animalcules <- function(dev = FALSE, master = "sc://172.18.0.1:15002") {
+run_animalcules <- function(dev = FALSE, master = NULL) {
     appDir <- system.file("shiny", package = "animalcules")
     if (appDir == "") {
         stop("Could not find myapp. Try re-installing `mypackage`.",
@@ -24,6 +24,15 @@ run_animalcules <- function(dev = FALSE, master = "sc://172.18.0.1:15002") {
     if (dev) {
         options(shiny.autoreload = TRUE)
     }
+    
+    if (is.null(master)) {
+      if (Sys.getenv("SPARK_CONNECT_ENDPOINT") != "") {
+        master <- Sys.getenv("SPARK_CONNECT_ENDPOINT")
+      } else{
+        master <- "sc://172.18.0.1:15002"
+      }
+    }
+    
     sc <<- sparklyr::spark_connect(
       master = master,
       method = "spark_connect",
