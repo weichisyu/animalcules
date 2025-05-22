@@ -28,10 +28,14 @@ run_animalcules <- function(dev = FALSE, master = NULL) {
     if (is.null(master)) {
       if (Sys.getenv("SPARK_CONNECT_ENDPOINT") != "") {
         master <- Sys.getenv("SPARK_CONNECT_ENDPOINT")
+        print(paste("Using SPARK_CONNECT_ENDPOINT:", master))
       } else{
         master <- "sc://172.18.0.1:15002"
+        print(paste("Using default master:", master))
       }
     }
+    print(Sys.getenv("SPARK_CONNECT_ENDPOINT"))
+    print(master)
     
     sc <<- sparklyr::spark_connect(
       master = master,
