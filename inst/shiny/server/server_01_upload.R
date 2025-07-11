@@ -194,66 +194,43 @@ all_table <- reactive({
   
   t1_readcount %>%  
     left_join(t2_taxinfo,by='taxonomyId') %>%  
-    left_join(t3_meta,by=join_by(sampleId == ID))
+    left_join(t3_meta,by=join_by(sampleId == ID)) %>%
+    # Cache the sorted data frame for fast reuse
+    sdf_persist()
 })
 
 tbl_read_count <- reactive({
-  #dbGetQuery(sc, glue("SELECT taxonomyId,sampleId,readCounts FROM metagenomic_test1_16.metagenomicanalysis_metagenomicconverttodelta_readcountsdt_x_0_outdeltatable_20241215164422")) %>% 
-    #read_table("^metagenomicreadcounttable_delta",tbls()) %>% 
-  #read_table("^metagenomicreadcounttable_delta",tbls()) %>% 
-    all_table() %>% 
-    select(taxonomyId,sampleId,readCounts) %>%
-    # The following code would encounter an error:
-    # Error in py_get_attr(py_context, py_method) : 
-    # AttributeError: 'DataFrame' object has no attribute '%>%'
-    #tidyr::pivot_wider(names_from = sampleId,values_from = readCounts ) %>%
-    #collect() %>% 
-    #as.data.frame()
-    arrange(taxonomyId,sampleId) %>% 
-    collect() %>% 
-    tidyr::pivot_wider(names_from = sampleId,values_from = readCounts )
+    all_table() %>%  
+    select(taxonomyId,sampleId,readCounts) %>%  
+    sdf_pivot(taxonomyId ~ sampleId, fun.aggregate = list(readCounts = "mean")) %>%
+    dplyr::arrange(taxonomyId) # sdf_pivot() change the order. Spark's shuffling operations do not guarantee a specific output order 
+  # IMPORTANT: The MultiAssayExperiment (MAE) will re-index the `rowData` (e.g. `tax_id`'s `taxonomyId`)
+  # to match the rownames of the `assays` (e.g., `read_count`'s `taxonomyId`).
+  # Ensure feature names are identical and in the same order in both tables to prevent data misalignment.
+  # MAE only check whether the `colData`'s rownames (e.g. metadata_table's `sampleId`) is indntical to the `assays`'s colnames (e.g. `read_count`'s `sampleId`).
 })
 
 tbl_tax_id <- reactive({
-  # t1_readcount <- read_table("^metagenomicreadcounttable_delta",tbls())
-  # t2_taxinfo <- read_table("^metagenomictaxinfotable_delta",tbls())
-  # 
-  # t1_readcount %>%  
-  #   select(taxonomyId) %>% 
-  #   distinct() %>% 
-  #   left_join(t2_taxinfo,by='taxonomyId') %>%  
-  #   filter(taxonomicRank == "S") %>% 
-  #   select(taxonomyId,taxonomicLineage) %>% 
-  #   collect()
   all_table() %>% 
     filter(taxonomicRank == "S") %>%
     select(taxonomyId,taxonomicLineage) %>% 
     distinct() %>% 
-    arrange(taxonomyId) %>% 
-    collect()
+    arrange(taxonomyId)
 })
 
 tbl_meta <- reactive({
-  # t1_readcount <- read_table("^metagenomicreadcounttable_delta",tbls())
-  # t2_meta <- read_table("^demo_phenotype",tbls())
-  # 
-  # t1_readcount %>%  
-  #   select(sampleId) %>% 
-  #   distinct() %>% 
-  #   #left_join(t2_meta,by='sampleId') %>%
-  #   left_join(t2_meta,by=join_by(sampleId == ID)) %>%
-  #   collect()
   drop_columns <- c("taxonomyId","readCounts","taxonomicRank","taxonomicLineage") 
   all_table() %>% 
     select(-one_of(drop_columns)) %>%
     distinct() %>% 
-    arrange(sampleId) %>% 
-    collect()
+    arrange(sampleId)
 })
 
 
 observe({
-  read_count <- tbl_read_count()
+  read_count <- tbl_read_count() %>% 
+    collect() %>% 
+    as.data.frame()
   row.names(read_count) <- read_count$taxonomyId
   read_count$taxonomyId <- NULL
   se_mgx <-
@@ -268,16 +245,18 @@ observe({
   # tax_id$tax_id <- NULL
   
   # transform tax_id_table
-  pre_tax_id <- tbl_tax_id()
+  pre_tax_id <- tbl_tax_id() %>% 
+    collect() %>% 
+    as.data.frame()
   tax_id_columns <- c("D", "P", "C", "O", "F", "G", "S")  # Define columns based on prefixes
-  prefixes <- paste0(tolower(tax_id_columns), "_")         # Generate the prefixes (e.g., "d_", "p_", ...)
-  split_Lineage <- strsplit(pre_tax_id$taxonomicLineage,'|',fixed=TRUE)
+  prefixes <- paste0(tolower(tax_id_columns), "__")         # Generate the prefixes (e.g., "d__", "p__", ...)
+  split_Lineage <- strsplit(pre_tax_id$taxonomicLineage,';',fixed=TRUE)
   tax_id <- data.frame()
   processed_rows <- lapply(split_Lineage, function(row) {
     # Extract values for each prefix
     sapply(prefixes, function(prefix) {
       value <- grep(paste0("^", prefix), row, value = TRUE)
-      if (length(value) == 0) "" else gsub(paste0("^", prefix), paste0(prefix, "_"), value)
+      if (length(value) == 0) "" else value
     })
   })
   # Convert the list to a data frame efficiently
