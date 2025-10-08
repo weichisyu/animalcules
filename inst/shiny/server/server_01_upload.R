@@ -194,7 +194,7 @@ all_table <- reactive({
   
   t1_readcount %>%  
     left_join(t2_taxinfo,by='taxonomyId') %>%  
-    left_join(t3_meta,by=join_by(sampleId == sampleId)) %>%
+    left_join(t3_meta,by=dplyr::join_by(sampleId == sampleId)) %>%
     # Cache the sorted data frame for fast reuse
     sdf_persist()
 })
@@ -212,10 +212,10 @@ tbl_read_count <- reactive({
 
 tbl_tax_id <- reactive({
   all_table() %>% 
-    filter(taxonomicRank == "S") %>%
+    dplyr::filter(taxonomicRank == "S") %>%
     select(taxonomyId,taxonomicLineage) %>% 
     distinct() %>% 
-    arrange(taxonomyId)
+    dplyr::arrange(taxonomyId)
 })
 
 tbl_meta <- reactive({
@@ -223,7 +223,7 @@ tbl_meta <- reactive({
   all_table() %>% 
     select(-one_of(drop_columns)) %>%
     distinct() %>% 
-    arrange(sampleId)
+    dplyr::arrange(sampleId)
 })
 
 
