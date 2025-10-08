@@ -186,11 +186,11 @@ tbls <- reactive({
 })
 
 all_table <- reactive({
-  t1_readcount <- read_table("^metagenomicreadcounttable_delta",tbls()) %>% 
+  t1_readcount <- read_table("^metagenomicreadcount",tbls()) %>% 
     select(taxonomyId,sampleId,readCounts)
-  t2_taxinfo <- read_table("^metagenomictaxinfotable_delta",tbls()) %>% 
+  t2_taxinfo <- read_table("^metagenomictaxinfo",tbls()) %>% 
     select(taxonomyId,taxonomicRank,taxonomicLineage)
-  t3_meta <- read_table("^metagenomic_phenotype",tbls())
+  t3_meta <- read_table("^metagenomics_phenotype",tbls())
   
   t1_readcount %>%  
     left_join(t2_taxinfo,by='taxonomyId') %>%  
