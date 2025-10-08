@@ -190,11 +190,11 @@ all_table <- reactive({
     select(taxonomyId,sampleId,readCounts)
   t2_taxinfo <- read_table("^metagenomictaxinfotable_delta",tbls()) %>% 
     select(taxonomyId,taxonomicRank,taxonomicLineage)
-  t3_meta <- read_table("^demo_phenotype",tbls())
+  t3_meta <- read_table("^metagenomic_phenotype",tbls())
   
   t1_readcount %>%  
     left_join(t2_taxinfo,by='taxonomyId') %>%  
-    left_join(t3_meta,by=join_by(sampleId == ID)) %>%
+    left_join(t3_meta,by=join_by(sampleId == sampleId)) %>%
     # Cache the sorted data frame for fast reuse
     sdf_persist()
 })
