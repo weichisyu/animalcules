@@ -194,20 +194,30 @@ all_table <- reactive({
   
   t1_readcount %>%  
     left_join(t2_taxinfo,by='taxonomyId') %>%  
-    left_join(t3_meta,by=dplyr::join_by(sampleId == sampleId)) %>%
-    # Cache the sorted data frame for fast reuse
-    sdf_persist()
+    left_join(t3_meta,by=dplyr::join_by(sampleId == sampleId))
 })
 
 tbl_read_count <- reactive({
     all_table() %>%  
-    select(taxonomyId,sampleId,readCounts) %>%  
-    sdf_pivot(taxonomyId ~ sampleId, fun.aggregate = list(readCounts = "mean")) %>%
-    dplyr::arrange(taxonomyId) # sdf_pivot() change the order. Spark's shuffling operations do not guarantee a specific output order 
+    select(taxonomyId,sampleId,readCounts) %>%
+    dplyr::arrange(sampleId) %>%
+    collect() %>%
+    dplyr::mutate(across(-taxonomyId, ~ replace_na(., 0))) %>%  # NA → 0
+    pivot_wider(
+      names_from = sampleId,
+      values_from = readCounts,
+      values_fn = mean
+    ) %>%
+    dplyr::arrange(taxonomyId) 
+  # pivot might change the order of the rows, so use arrange() to ensure the order is by taxonomyId.
   # IMPORTANT: The MultiAssayExperiment (MAE) will re-index the `rowData` (e.g. `tax_id`'s `taxonomyId`)
   # to match the rownames of the `assays` (e.g., `read_count`'s `taxonomyId`).
   # Ensure feature names are identical and in the same order in both tables to prevent data misalignment.
   # MAE only check whether the `colData`'s rownames (e.g. metadata_table's `sampleId`) is indntical to the `assays`'s colnames (e.g. `read_count`'s `sampleId`).
+  
+  # sdf_pivot() will encounter the following error:Warning: Error in py_get_attr: AttributeError: 'DataFrame' object has no attribute '%>%'
+  ## sdf_pivot(taxonomyId ~ sampleId, fun.aggregate = list(readCounts = "mean")) %>%
+  ## sdf_pivot() change the order. Spark's shuffling operations do not guarantee a specific output order 
 })
 
 tbl_tax_id <- reactive({
@@ -248,8 +258,8 @@ observe({
   pre_tax_id <- tbl_tax_id() %>% 
     collect() %>% 
     as.data.frame()
-  tax_id_columns <- c("D", "P", "C", "O", "F", "G", "S")  # Define columns based on prefixes
-  prefixes <- paste0(tolower(tax_id_columns), "__")         # Generate the prefixes (e.g., "d__", "p__", ...)
+  tax_id_columns <- c("K", "P", "C", "O", "F", "G", "S")  # Define columns based on prefixes
+  prefixes <- paste0(tolower(tax_id_columns), "__")         # Generate the prefixes (e.g., "k__", "p__", ...)
   split_Lineage <- strsplit(pre_tax_id$taxonomicLineage,';',fixed=TRUE)
   tax_id <- data.frame()
   processed_rows <- lapply(split_Lineage, function(row) {
@@ -283,7 +293,6 @@ observe({
   se_colData <-
     metadata_table %>%
     S4Vectors::DataFrame()
-  
   
   microbe_se <- SummarizedExperiment::SummarizedExperiment(assays = se_mgx,
                                                            colData = se_colData,
