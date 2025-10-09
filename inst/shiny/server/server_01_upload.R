@@ -193,7 +193,7 @@ all_table <- reactive({
   t3_meta <- read_table("^metagenomics_phenotype",tbls())
   
   t1_readcount %>%  
-    left_join(t2_taxinfo,by='taxonomyId') %>%  
+    left_join(t2_taxinfo,by='taxonomyId') %>%
     left_join(t3_meta,by=dplyr::join_by(sampleId == sampleId))
 })
 
@@ -202,12 +202,12 @@ tbl_read_count <- reactive({
     select(taxonomyId,sampleId,readCounts) %>%
     dplyr::arrange(sampleId) %>%
     collect() %>%
-    dplyr::mutate(across(-taxonomyId, ~ replace_na(., 0))) %>%  # NA → 0
     pivot_wider(
       names_from = sampleId,
       values_from = readCounts,
       values_fn = mean
     ) %>%
+    dplyr::mutate(across(-taxonomyId, ~ replace_na(., 0))) %>%   # NA → 0
     dplyr::arrange(taxonomyId) 
   # pivot might change the order of the rows, so use arrange() to ensure the order is by taxonomyId.
   # IMPORTANT: The MultiAssayExperiment (MAE) will re-index the `rowData` (e.g. `tax_id`'s `taxonomyId`)
