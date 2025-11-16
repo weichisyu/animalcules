@@ -1,9 +1,9 @@
 # A notification ID
 # id <- NULL
 
-url <- a("website!", href="https://wejlab.github.io/animalcules-docs/")
+url <- a("Reference", href="https://wejlab.github.io/animalcules-docs/")
 output$tab <- renderUI({
-  tagList("Need help? Check the docs on our", url)
+  tagList(url,": Zhao, Y., Federico, A., Faits, T. et al. animalcules: interactive microbiome analytics and visualization in R. Microbiome 9, 76 (2021)")
 })
 
 # reactive values shared thorough the shiny app
